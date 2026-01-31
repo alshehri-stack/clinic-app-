@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import random
-import base64
 from datetime import datetime
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -19,7 +18,7 @@ st.markdown("""
     div.stButton > button.secondary-button {
         background-color: #f44336; color: white;
     }
-    .stTextInput > label, .stNumberInput > label, .stSelectbox > label, .stRadio > label, .stTextArea > label, .stFileUploader > label, .stMultiselect > label {
+    .stTextInput > label, .stNumberInput > label, .stSelectbox > label, .stRadio > label, .stTextArea > label {
         font-family: 'Tajawal', sans-serif; text-align: right; direction: rtl; font-weight: bold;
     }
     .stAlert { direction: rtl; text-align: right; }
@@ -65,6 +64,7 @@ with st.sidebar:
     if access_code == "admin123":
         is_admin = True
         st.success("مرحباً دكتورة! 👋")
+        st.info("وضع المسؤول مفعل")
     else:
         st.caption("للمساعدة والاستفسار: تواصل معنا")
 
@@ -77,33 +77,37 @@ if is_admin:
     sheet = connect_to_sheet()
     if sheet:
         try:
+            # استخدام get_all_values لتفادي مشاكل الأعمدة المكررة
             all_values = sheet.get_all_values()
             
             if len(all_values) > 1:
-                # معالجة العناوين
                 raw_headers = all_values[0]
                 rows = all_values[1:]
-                headers = [str(h).strip().lower() for h in raw_headers]
                 
-                # إزالة التكرار في العناوين
-                seen = {}; final_headers = []
-                for h in headers:
-                    if h in seen: seen[h]+=1; final_headers.append(f"{h}_{seen[h]}")
-                    else: seen[h]=0; final_headers.append(h)
+                # تنظيف العناوين ومعالجة التكرار
+                headers = []
+                seen = {}
+                for h in raw_headers:
+                    h_clean = str(h).strip().lower()
+                    if not h_clean: h_clean = "unknown" # تسمية الأعمدة الفارغة
+                    if h_clean in seen:
+                        seen[h_clean] += 1
+                        headers.append(f"{h_clean}_{seen[h_clean]}")
+                    else:
+                        seen[h_clean] = 0
+                        headers.append(h_clean)
 
-                df = pd.DataFrame(rows, columns=final_headers)
+                df = pd.DataFrame(rows, columns=headers)
                 
-                # التأكد من الأعمدة
-                if 'diet_plan' not in df.columns: df['diet_plan'] = ""
-                if 'diet_code' not in df.columns: df['diet_code'] = ""
+                # التأكد من الأعمدة المطلوبة
+                if 'diet_title' not in df.columns: df['diet_title'] = ""
+                if 'diet_link' not in df.columns: df['diet_link'] = ""
                 if 'details' not in df.columns: df['details'] = ""
 
-                # --- الفرز: ملفات جديدة (بدون كود PDF) vs أرشيف (مع PDF) ---
-                # نعتبر الملف مكتمل إذا كان عمود diet_code يحتوي على بيانات طويلة (Base64)
-                df['is_completed'] = df['diet_code'].astype(str).str.len() > 50
-                
-                new_patients = df[~df['is_completed']]
-                archived_patients = df[df['is_completed']]
+                # --- الفرز: ملفات جديدة (بدون رابط) vs أرشيف (مع رابط) ---
+                df['has_link'] = df['diet_link'].astype(str).str.len() > 5
+                new_patients = df[~df['has_link']]
+                archived_patients = df[df['has_link']]
 
                 tab1, tab2 = st.tabs([f"🆕 مرضى جدد ({len(new_patients)})", "📂 الأرشيف والمكتملة"])
                 
@@ -115,44 +119,39 @@ if is_admin:
                             pt_file = pt.get('file_no', '---')
                             
                             with st.expander(f"ملف: {pt_name} (#{pt_file})", expanded=False):
-                                # عرض البيانات
                                 c1, c2 = st.columns(2)
                                 c1.info(f"**الهدف:** {pt.get('target')}")
                                 c2.warning(f"**الوزن:** {pt.get('weight')} | **الطول:** {pt.get('height')}")
                                 
                                 st.markdown("---")
-                                st.markdown("##### 📝 التفاصيل:")
-                                st.text_area("بيانات المريض:", value=pt.get('details'), height=150, disabled=True, key=f"d_{pt_file}")
+                                st.markdown("##### 📝 تفاصيل الحالة:")
+                                st.text_area("بيانات المريض:", value=pt.get('details'), height=150, disabled=True, key=f"det_{pt_file}")
                                 
                                 st.markdown("---")
-                                st.markdown("### 📤 رفع النظام الغذائي (PDF)")
-                                st.info("بمجرد رفع الملف، سينتقل المريض للأرشيف ويظهر الملف في حسابه.")
+                                st.markdown("### 📤 إرسال الجدول الغذائي")
+                                st.info("للحفاظ على سرعة التطبيق، يرجى رفع ملف الـ PDF على (Google Drive) ونسخ الرابط هنا.")
                                 
-                                with st.form(key=f"upload_{pt_file}"):
-                                    diet_name = st.text_input("اسم النظام (مثلاً: لو كارب):", key=f"dn_{pt_file}")
-                                    uploaded_pdf = st.file_uploader("ارفعي ملف الـ PDF هنا:", type=['pdf'], key=f"up_{pt_file}")
+                                with st.form(key=f"diet_form_{pt_file}"):
+                                    d_title = st.text_input("اسم النظام (مثلاً: لو كارب):", key=f"t_{pt_file}")
+                                    d_link = st.text_input("رابط الملف (Link):", placeholder="https://drive.google.com/...", key=f"l_{pt_file}")
                                     
-                                    if st.form_submit_button("حفظ وإرسال ✅"):
-                                        if uploaded_pdf and diet_name:
+                                    if st.form_submit_button("إرسال واعتماد ✅"):
+                                        if d_title and d_link:
                                             try:
                                                 cell = sheet.find(str(pt_file))
                                                 if cell:
-                                                    # تحويل PDF إلى Base64
-                                                    bytes_data = uploaded_pdf.getvalue()
-                                                    b64_str = base64.b64encode(bytes_data).decode()
-                                                    
-                                                    # تحديث الاسم والكود
-                                                    if 'diet_plan' in headers:
-                                                        sheet.update_cell(cell.row, headers.index('diet_plan')+1, diet_name)
-                                                    if 'diet_code' in headers:
-                                                        sheet.update_cell(cell.row, headers.index('diet_code')+1, b64_str)
+                                                    # تحديث اسم الدايت والرابط
+                                                    if 'diet_title' in headers:
+                                                        sheet.update_cell(cell.row, headers.index('diet_title')+1, d_title)
+                                                    if 'diet_link' in headers:
+                                                        sheet.update_cell(cell.row, headers.index('diet_link')+1, d_link)
                                                     
                                                     st.success("تم الإرسال بنجاح! انتقل الملف للأرشيف.")
                                                     st.rerun()
                                             except Exception as e:
                                                 st.error(f"خطأ: {e}")
                                         else:
-                                            st.error("يرجى كتابة الاسم ورفع الملف.")
+                                            st.warning("يرجى تعبئة الاسم والرابط.")
                     else:
                         st.success("🎉 لا توجد ملفات جديدة.")
 
@@ -163,13 +162,14 @@ if is_admin:
                             pt_name = pt.get('name', 'غير محدد')
                             pt_file = pt.get('file_no', '---')
                             
-                            with st.expander(f"✅ {pt_name} (#{pt_file}) - مكتمل", expanded=False):
-                                st.write(f"**النظام:** {pt.get('diet_plan')}")
+                            with st.expander(f"✅ {pt_name} (#{pt_file})", expanded=False):
+                                st.write(f"**النظام:** {pt.get('diet_title')}")
                                 st.write(f"**الجوال:** {pt.get('phone')}")
-                                st.text_area("سجل المتابعة والتفاصيل:", value=pt.get('details'), height=200, disabled=True, key=f"arch_{pt_file}")
+                                if pt.get('diet_link'):
+                                    st.link_button("عرض الجدول", pt.get('diet_link'))
+                                st.text_area("السجل والتفاصيل:", value=pt.get('details'), height=100, disabled=True, key=f"arch_{pt_file}")
                     else:
                         st.info("الأرشيف فارغ.")
-
             else:
                 st.info("لا توجد بيانات مسجلة بعد.")
         except Exception as e:
@@ -218,15 +218,15 @@ else:
 
         elif st.session_state.step == 2:
             st.markdown("### ⚡ الخطوة 2: النشاط والروتين")
-            
-            # --- التعديل المطلوب: النشاط العالي فقط يظهر الخيارات ---
             activity = st.radio("مستوى النشاط", ["خامل", "متوسط", "عالي"])
+            
+            # خيارات النشاط العالي فقط
             gym = "غير محدد"
             if activity == "عالي":
-                gym = st.radio("مكان التمرين", ["منزل", "نادي رياضي"])
+                gym = st.radio("أين تمارس الرياضة؟", ["منزل", "نادي رياضي"])
             
             days = st.slider("أيام التمرين", 0, 7, 3)
-            # --- التعديل المطلوب: أنواع التمارين ---
+            # أنواع التمارين المعدلة
             type_ex = st.multiselect("نوع التمرين", ["كارديو", "مقاومة", "مختلط", "لا يوجد"])
             
             c_back, c_next = st.columns([1, 2])
@@ -265,7 +265,6 @@ else:
 
         elif st.session_state.step == 5:
             st.markdown("### 💳 الخطوة الأخيرة: الدفع")
-            # --- التعديل المطلوب: السعر 200 ورسالة الراجحي ---
             st.info("قيمة الاشتراك: 200 ريال")
             st.markdown("""
             #### 🏦 التحويل البنكي
@@ -286,9 +285,9 @@ else:
                                 p = st.session_state.patient_data
                                 new_file = str(random.randint(10000, 99999))
                                 
-                                # تجميع التفاصيل
+                                # تجميع التفاصيل في نص واحد للعمود الأخير
                                 details_blob = f"""
-                                [تسجيل جديد: {datetime.now().strftime('%Y-%m-%d')}]
+                                [تسجيل: {datetime.now().strftime('%Y-%m-%d')}]
                                 الأهداف: {p.get('goals')}
                                 النشاط: {p.get('activity')} ({p.get('gym')}) - {p.get('days')} أيام
                                 نوع التمرين: {p.get('type_ex')}
@@ -298,7 +297,7 @@ else:
                                 ملاحظات: {p.get('notes')}
                                 """.strip()
 
-                                # الحفظ في الإكسل
+                                # الحفظ (11 عمود بالضبط)
                                 row = [
                                     new_file,
                                     p.get('name'),
@@ -308,8 +307,8 @@ else:
                                     p.get('target_weight'),
                                     p.get('height'),
                                     p.get('age'),
-                                    "",             # diet_plan
-                                    "",             # diet_code
+                                    "",             # diet_title
+                                    "",             # diet_link
                                     details_blob    # Details
                                 ]
                                 
@@ -325,14 +324,13 @@ else:
 
         elif st.session_state.step == 6:
             st.balloons()
-            # --- التعديل المطلوب: رسالة يا بطل/بطلة ---
             gender_msg = "يا بطل" if st.session_state.patient_data.get('gender') == "ذكر" else "يا بطلة"
             st.success(f"تم الاشتراك {gender_msg}! 🎉")
             st.info("سيتم إرسال نظامك الغذائي خلال 3 أيام عمل في ملفك الشخصي.")
             st.markdown(f"### رقم ملفك: `{st.session_state.new_file_number}`")
             if st.button("عودة للرئيسية"): restart(); st.rerun()
 
-    # --- دخول المراجعين (الواجهة الجديدة) ---
+    # --- دخول المراجعين ---
     elif st.session_state.user_type == 'returning':
         if st.session_state.step == 1:
             st.markdown("### 🔐 دخول المراجعين")
@@ -345,7 +343,9 @@ else:
                         try:
                             vals = sheet.get_all_values()
                             if len(vals) > 1:
-                                headers = [str(h).strip().lower() for h in vals[0]]
+                                raw_headers = vals[0]
+                                headers = [str(h).strip().lower() for h in raw_headers]
+                                
                                 # معالجة تكرار الأعمدة
                                 seen = {}; final_headers = []
                                 for h in headers:
@@ -353,6 +353,8 @@ else:
                                     else: seen[h]=0; final_headers.append(h)
 
                                 df = pd.DataFrame(vals[1:], columns=final_headers)
+                                
+                                # البحث عن الجوال (phone)
                                 phone_col = next((c for c in df.columns if 'phone' in c), None)
                                 
                                 if phone_col:
@@ -364,6 +366,7 @@ else:
                                         st.session_state.patient_data = user.iloc[0].to_dict()
                                         next_step(); st.rerun()
                                     else: st.error("رقم الجوال غير مسجل.")
+                                else: st.error("خطأ فني في الملف.")
                         except Exception as e: st.error(f"خطأ: {e}")
             with c2:
                 if st.button("رجوع"): restart(); st.rerun()
@@ -375,27 +378,18 @@ else:
             
             # --- قسم الجدول الغذائي ---
             st.markdown("### 📥 جدولك الغذائي")
-            diet_code = user.get('diet_code', '')
-            diet_name = user.get('diet_plan', '')
+            diet_title = user.get('diet_title', '')
+            diet_link = user.get('diet_link', '')
             
-            if diet_code and len(str(diet_code)) > 50:
-                st.success(f"نظامك الحالي: **{diet_name}**")
-                try:
-                    b64_bytes = base64.b64decode(diet_code)
-                    st.download_button(
-                        label="📄 تحميل النظام الغذائي (PDF)",
-                        data=b64_bytes,
-                        file_name="My_Diet_Plan.pdf",
-                        mime="application/pdf"
-                    )
-                except:
-                    st.error("ملف الدايت تالف.")
+            if diet_link and len(str(diet_link)) > 5:
+                st.success(f"نظامك الحالي: **{diet_title}**")
+                st.link_button("📄 تحميل/عرض النظام الغذائي (PDF)", diet_link)
             else:
                 st.info("⏳ جاري إعداد جدولك، سيظهر هنا خلال 3 أيام.")
             
             st.divider()
             
-            # --- قسم المتابعة الأسبوعية الجديد ---
+            # --- قسم المتابعة الأسبوعية ---
             st.subheader("📊 المتابعة الأسبوعية")
             with st.expander("اضغط هنا لتعبئة نموذج المتابعة"):
                 with st.form("weekly_form"):
@@ -412,8 +406,7 @@ else:
                             if sheet:
                                 cell = sheet.find(str(pt_file))
                                 if cell:
-                                    # ندمج الملاحظات الجديدة مع القديمة في عمود Details
-                                    # نحتاج معرفة رقم عمود Details
+                                    # ندمج الملاحظات الجديدة في عمود Details
                                     headers = sheet.row_values(1)
                                     headers_lower = [str(h).strip().lower() for h in headers]
                                     if 'details' in headers_lower:
