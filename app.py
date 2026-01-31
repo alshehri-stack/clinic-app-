@@ -9,28 +9,19 @@ from oauth2client.service_account import ServiceAccountCredentials
 # --- إعدادات الصفحة ---
 st.set_page_config(page_title="العيادة الإلكترونية", layout="wide", page_icon="🩺")
 
-# --- تنسيق CSS (تحسين الخطوط) ---
+# --- تنسيق CSS ---
 st.markdown("""
 <style>
     .main { direction: rtl; text-align: right; }
     div.stButton > button:first-child {
         background-color: #009688; color: white; border-radius: 12px; width: 100%; padding: 10px; font-size: 18px;
     }
-    div.stButton > button.secondary-button {
-        background-color: #f44336; color: white;
-    }
-    .stTextInput > label, .stNumberInput > label, .stSelectbox > label, .stRadio > label, .stTextArea > label, .stFileUploader > label {
+    .stTextInput > label, .stNumberInput > label, .stSelectbox > label, .stRadio > label, .stTextArea > label {
         font-family: 'Tajawal', sans-serif; text-align: right; direction: rtl; font-weight: bold; font-size: 16px;
     }
-    /* تحسين شكل مربع النص الطويل */
     .stTextArea textarea {
-        font-family: 'Tajawal', sans-serif;
-        font-size: 16px !important;
-        color: #000000 !important; /* لون أسود غامق */
-        background-color: #f0f2f6;
-        direction: rtl;
+        font-size: 16px !important; color: #000 !important; background-color: #f9f9f9; direction: rtl;
     }
-    .stAlert { direction: rtl; text-align: right; }
     #MainMenu {visibility: hidden;} footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
@@ -44,7 +35,7 @@ def connect_to_sheet():
         sheet = client.open("Clinic_Data").sheet1
         return sheet
     except Exception as e:
-        st.error(f"خطأ في الاتصال بقاعدة البيانات: {e}")
+        st.error(f"خطأ في الاتصال: {e}")
         return None
 
 # --- إدارة الحالة ---
@@ -67,13 +58,10 @@ with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3063/3063823.png", width=50)
     st.markdown("### العيادة الإلكترونية")
     st.markdown("---")
-    
     access_code = st.text_input("الدخول الإداري 🔒", type="password", placeholder="الرمز السري")
-    
     if access_code == "admin123":
         is_admin = True
         st.success("مرحباً دكتورة! 👋")
-        st.info("وضع المسؤول مفعل")
     else:
         st.caption("للمساعدة والاستفسار: تواصل معنا")
 
@@ -89,10 +77,12 @@ if is_admin:
             all_values = sheet.get_all_values()
             
             if len(all_values) > 1:
+                # معالجة العناوين وتنظيفها
                 raw_headers = all_values[0]
                 rows = all_values[1:]
                 headers = [str(h).strip().lower() for h in raw_headers]
                 
+                # إزالة التكرار
                 seen = {}; final_headers = []
                 for h in headers:
                     if h in seen: seen[h]+=1; final_headers.append(f"{h}_{seen[h]}")
@@ -100,11 +90,11 @@ if is_admin:
 
                 df = pd.DataFrame(rows, columns=final_headers)
                 
-                if 'diet_plan' not in df.columns: df['diet_plan'] = ""
-                if 'diet_code' not in df.columns: df['diet_code'] = "" 
-                if 'details' not in df.columns: df['details'] = ""
+                # التأكد من الأعمدة
+                for col in ['diet_plan', 'diet_code', 'details']:
+                    if col not in df.columns: df[col] = ""
 
-                # الفرز
+                # الفرز: الجدد (diet_code قصير) vs الأرشيف
                 df['is_completed'] = df['diet_code'].astype(str).str.len() > 5
                 new_patients = df[~df['is_completed']]
                 archived_patients = df[df['is_completed']]
@@ -125,8 +115,8 @@ if is_admin:
                                 
                                 st.markdown("---")
                                 st.markdown("##### 📝 بيانات المريض:")
-                                # تكبير البوكس هنا وإزالة disabled
-                                st.text_area("التفاصيل:", value=pt.get('details'), height=300, key=f"d_{pt_file}")
+                                # عرض التفاصيل كاملة
+                                st.text_area("التفاصيل:", value=pt.get('details'), height=250, key=f"d_{pt_file}")
                                 
                                 st.markdown("---")
                                 st.markdown("### 📤 إرسال النظام الغذائي")
@@ -134,40 +124,43 @@ if is_admin:
                                 with st.form(key=f"upload_{pt_file}"):
                                     diet_name = st.text_input("اسم النظام (مثلاً: لو كارب):", key=f"dn_{pt_file}")
                                     
-                                    st.write("طريقة الإرسال:")
-                                    upload_option = st.radio("", ["رفع ملف PDF (للملفات الصغيرة)", "رابط خارجي (Drive/Canva)"], key=f"opt_{pt_file}")
+                                    # خيارين واضحين للإرسال
+                                    st.write("**طريقة الإرسال:**")
+                                    method = st.radio("", ["رابط خارجي (Drive/Canva) - الأفضل 🌟", "رفع ملف PDF (للملفات الصغيرة فقط)"], key=f"m_{pt_file}")
                                     
-                                    file_data = None
-                                    link_data = None
+                                    link_val = ""
+                                    file_val = None
                                     
-                                    if "رفع ملف" in upload_option:
-                                        uploaded_pdf = st.file_uploader("ملف PDF:", type=['pdf'], key=f"up_{pt_file}")
-                                        if uploaded_pdf:
-                                            if uploaded_pdf.size > 50000: # 50KB limit approx
-                                                st.error("⚠️ الملف كبير. يرجى استخدام الرابط.")
-                                            else:
-                                                bytes_data = uploaded_pdf.getvalue()
-                                                file_data = base64.b64encode(bytes_data).decode()
+                                    if "رابط" in method:
+                                        link_val = st.text_input("🔗 الصقي رابط الملف هنا:", placeholder="https://drive.google.com/...", key=f"lnk_{pt_file}")
                                     else:
-                                        link_data = st.text_input("رابط الملف:", placeholder="https://...", key=f"l_{pt_file}")
+                                        file_val = st.file_uploader("📂 اسحبي الملف هنا:", type=['pdf'], key=f"up_{pt_file}")
 
                                     if st.form_submit_button("حفظ وإرسال ✅"):
                                         try:
                                             cell = sheet.find(str(pt_file))
                                             if cell:
                                                 final_code = ""
-                                                if file_data: final_code = file_data
-                                                elif link_data: final_code = link_data
+                                                # تحديد القيمة التي سنحفظها
+                                                if link_val: final_code = link_val
+                                                elif file_val:
+                                                    if file_val.size > 50000:
+                                                        st.error("الملف كبير جداً! استخدمي الرابط.")
+                                                    else:
+                                                        final_code = base64.b64encode(file_val.getvalue()).decode()
                                                 
                                                 if final_code and diet_name:
+                                                    # تحديث اسم الدايت
                                                     if 'diet_plan' in headers:
                                                         sheet.update_cell(cell.row, headers.index('diet_plan')+1, diet_name)
+                                                    # تحديث كود الدايت (الرابط أو الملف)
                                                     if 'diet_code' in headers:
                                                         sheet.update_cell(cell.row, headers.index('diet_code')+1, final_code)
-                                                    st.success("تم الإرسال!")
+                                                    
+                                                    st.success("تم الإرسال بنجاح! انتقل الملف للأرشيف.")
                                                     st.rerun()
                                                 else:
-                                                    st.error("ناقص بيانات.")
+                                                    st.error("يرجى تعبئة البيانات.")
                                         except Exception as e:
                                             st.error(f"خطأ: {e}")
                     else:
@@ -185,16 +178,9 @@ if is_admin:
                                 st.write(f"**الجوال:** {pt.get('phone')}")
                                 
                                 st.markdown("##### 📜 سجل المتابعة والتفاصيل:")
-                                # --- التعديل الكبير هنا: بوكس كبير وواضح ---
-                                st.text_area(
-                                    label="", 
-                                    value=pt.get('details'), 
-                                    height=400,  # ارتفاع كبير
-                                    key=f"arch_{pt_file}" 
-                                    # حذفنا disabled=True عشان يصير لونه أسود واضح
-                                )
+                                st.text_area("", value=pt.get('details'), height=300, key=f"arch_{pt_file}")
                     else:
-                        st.info("لا يوجد أرشيف.")
+                        st.info("الأرشيف فارغ.")
             else:
                 st.info("لا توجد بيانات.")
         except Exception as e:
@@ -308,6 +294,7 @@ else:
                                 p = st.session_state.patient_data
                                 new_file = str(random.randint(10000, 99999))
                                 
+                                # تجميع التفاصيل في نص واحد (لأننا اختصرنا الأعمدة)
                                 details_blob = f"""
                                 [تسجيل: {datetime.now().strftime('%Y-%m-%d')}]
                                 الأهداف: {p.get('goals')}
@@ -319,6 +306,7 @@ else:
                                 ملاحظات: {p.get('notes')}
                                 """.strip()
 
+                                # الحفظ حسب الأعمدة الـ 11
                                 row = [
                                     new_file,
                                     p.get('name'),
@@ -328,9 +316,9 @@ else:
                                     p.get('target_weight'),
                                     p.get('height'),
                                     p.get('age'),
-                                    "",             
-                                    "",             
-                                    details_blob    
+                                    "",             # diet_plan
+                                    "",             # diet_code
+                                    details_blob    # Details
                                 ]
                                 
                                 sheet.append_row(row)
