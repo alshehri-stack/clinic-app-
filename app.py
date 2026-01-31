@@ -8,14 +8,13 @@ from oauth2client.service_account import ServiceAccountCredentials
 # --- إعدادات الصفحة ---
 st.set_page_config(page_title="العيادة الإلكترونية", layout="wide", page_icon="🩺")
 
-# --- تنسيق CSS (لجعل التطبيق عربي وأنيق) ---
+# --- تنسيق CSS ---
 st.markdown("""
 <style>
     .main { direction: rtl; text-align: right; }
     div.stButton > button:first-child {
         background-color: #009688; color: white; border-radius: 12px; width: 100%; padding: 10px; font-size: 18px;
     }
-    /* تنسيق زر الرجوع بلون مختلف */
     div.stButton > button.secondary-button {
         background-color: #f44336; color: white;
     }
@@ -39,12 +38,11 @@ def connect_to_sheet():
         st.error(f"خطأ في الاتصال بقاعدة البيانات: {e}")
         return None
 
-# --- إدارة الحالة (Session State) ---
+# --- إدارة الحالة ---
 if 'step' not in st.session_state: st.session_state.step = 0
 if 'user_type' not in st.session_state: st.session_state.user_type = None
 if 'patient_data' not in st.session_state: st.session_state.patient_data = {}
 
-# دوال التنقل
 def next_step(): st.session_state.step += 1
 def prev_step(): st.session_state.step -= 1
 def restart():
@@ -53,7 +51,7 @@ def restart():
     st.session_state.patient_data = {}
 
 # ==========================================
-# 🔐 القائمة الجانبية (بوابة الأخصائية السرية)
+# 🔐 القائمة الجانبية (الأخصائية)
 # ==========================================
 is_admin = False
 with st.sidebar:
@@ -61,10 +59,9 @@ with st.sidebar:
     st.markdown("### العيادة الإلكترونية")
     st.markdown("---")
     
-    # الكلمة السرية للدخول كأخصائية
     access_code = st.text_input("الدخول الإداري 🔒", type="password", placeholder="الرمز السري")
     
-    if access_code == "admin123": # كلمة المرور
+    if access_code == "admin123":
         is_admin = True
         st.success("مرحباً دكتورة! 👋")
         st.info("وضع المسؤول مفعل")
@@ -83,13 +80,19 @@ if is_admin:
             all_values = sheet.get_all_values()
             
             if len(all_values) > 1:
+                # فصل العناوين عن البيانات
                 headers = all_values[0]
                 rows = all_values[1:]
                 df = pd.DataFrame(rows, columns=headers)
                 
+                # --- (هام جداً) توحيد أسماء الأعمدة لتفادي الخطأ ---
+                df.columns = df.columns.str.lower().str.strip()
+                
+                # التأكد من وجود عمود الحالة
                 if 'diet_plan_sent' not in df.columns:
                     df['diet_plan_sent'] = "FALSE"
                 
+                # تنظيف عمود الحالة للمقارنة
                 df['diet_sent_clean'] = df['diet_plan_sent'].astype(str).str.upper().str.strip()
                 pending_patients = df[df['diet_sent_clean'] != "TRUE"]
                 
@@ -100,32 +103,48 @@ if is_admin:
                         st.write(f"لديك ({len(pending_patients)}) مريض بانتظار استلام الجدول.")
                         
                         for index, pt in pending_patients.iterrows():
-                            with st.expander(f"ملف: {pt['name']} (#{pt['file_no']})", expanded=True):
+                            # نستخدم .get لتجنب الخطأ إذا كان العمود ناقص
+                            pt_name = pt.get('name', 'غير محدد')
+                            pt_file = pt.get('file_no', '---')
+                            
+                            with st.expander(f"ملف: {pt_name} (#{pt_file})", expanded=True):
                                 c1, c2 = st.columns(2)
-                                c1.info(f"**الهدف:** {pt['goals']}")
-                                c2.warning(f"**الوزن:** {pt['weight']} كجم | **الطول:** {pt['height']} سم")
+                                c1.info(f"**الهدف:** {pt.get('goals', '')}")
+                                c2.warning(f"**الوزن:** {pt.get('weight', '')} كجم | **الطول:** {pt.get('hight', pt.get('height', ''))} سم")
                                 
                                 st.markdown("---")
-                                st.write(f"**📱 الجوال:** {pt['phone']}")
-                                st.write(f"**🏋️ النشاط:** {pt['activity']} ({pt['gym_home']})")
-                                st.write(f"**🥗 العادات:** {pt['meals_count']} وجبات")
+                                st.write(f"**📱 الجوال:** {pt.get('phone', '')}")
+                                st.write(f"**🏋️ النشاط:** {pt.get('activity', '')}")
+                                st.write(f"**🥗 العادات:** {pt.get('meals_count', '')} وجبات")
                                 
                                 st.markdown("**📝 الروتين اليومي:**")
-                                st.text(pt['daily_routine'])
+                                st.text(pt.get('daily_routine', ''))
                                 st.markdown(f"**💳 طريقة الدفع:** {pt.get('payment_method', 'غير محدد')}")
                                 
                                 st.markdown("---")
                                 st.markdown("### 📤 إرسال الجدول الغذائي")
                                 st.info("اضغطي هنا بعد إرسال الجدول للمريض لتغيير الحالة إلى 'تم الإرسال'")
                                 
-                                if st.button(f"✅ تم إرسال الجدول لـ {pt['name']}", key=f"send_{pt['file_no']}"):
+                                if st.button(f"✅ تم إرسال الجدول لـ {pt_name}", key=f"send_{pt_file}"):
                                     try:
-                                        cell = sheet.find(str(pt['file_no']))
+                                        # البحث عن الصف وتحديثه
+                                        cell = sheet.find(str(pt_file))
                                         if cell:
-                                            col_index = headers.index("diet_plan_sent") + 1
-                                            sheet.update_cell(cell.row, col_index, "TRUE")
-                                            st.success(f"تم تحديث حالة الملف للمريض {pt['name']} بنجاح!")
-                                            st.rerun()
+                                            # نبحث عن رقم عمود diet_plan_sent الأصلي (بغض النظر عن حالة الأحرف)
+                                            found_col = False
+                                            col_idx = 1
+                                            for h in headers:
+                                                if h.lower().strip() == "diet_plan_sent":
+                                                    found_col = True
+                                                    break
+                                                col_idx += 1
+                                            
+                                            if found_col:
+                                                sheet.update_cell(cell.row, col_idx, "TRUE")
+                                                st.success(f"تم تحديث حالة الملف للمريض {pt_name} بنجاح!")
+                                                st.rerun()
+                                            else:
+                                                st.error("لم يتم العثور على عمود diet_plan_sent في ملف الإكسل.")
                                     except Exception as e:
                                         st.error(f"حدث خطأ في التحديث: {e}")
                     else:
@@ -162,7 +181,7 @@ else:
         
         # صفحة 1: شخصي
         if st.session_state.step == 1:
-            st.markdown("### 👤 الخطوة 1: المعلومات الشخصية والأهداف")
+            st.markdown("### 👤 الخطوة 1: المعلومات الشخصية")
             name = st.text_input("الاسم الثلاثي")
             phone = st.text_input("رقم الجوال (مهم جداً للدخول لاحقاً)") 
             
@@ -178,7 +197,6 @@ else:
             other_goal_text = st.text_input("توضيح الهدف الإضافي:") if "غير ذلك" in goals else ""
             
             st.markdown("---")
-            # --- تعديل: إضافة زر الرجوع هنا ---
             btn_col1, btn_col2 = st.columns([2, 1])
             with btn_col1:
                 if st.button("التالي: النشاط البدني ⬅️", use_container_width=True):
@@ -187,11 +205,10 @@ else:
                         next_step(); st.rerun()
                     else: st.error("الرجاء كتابة الاسم ورقم الجوال.")
             with btn_col2:
-                # زر الرجوع للقائمة الرئيسية
                 if st.button("🏠 إلغاء ورجوع", use_container_width=True):
                     restart(); st.rerun()
 
-        # صفحة 2: النشاط (تفصيلي)
+        # صفحة 2: النشاط
         elif st.session_state.step == 2:
             st.markdown("### ⚡ الخطوة 2: النشاط البدني")
             activity_level = st.radio("معدل النشاط اليومي:", ["قليل (عمل مكتبي)", "متوسط (مشي)", "عالي (تمارين مكثفة)"])
@@ -208,7 +225,7 @@ else:
             with c2: 
                 if st.button("رجوع"): prev_step(); st.rerun()
 
-        # صفحة 3: التغذية (تفصيلي)
+        # صفحة 3: التغذية
         elif st.session_state.step == 3:
             st.markdown("### 🍽️ الخطوة 3: العادات الغذائية والصحية")
             with st.form("new_pt_step3"):
@@ -252,21 +269,14 @@ else:
         elif st.session_state.step == 5:
             st.markdown("### 💳 الخطوة الأخيرة: إتمام الاشتراك")
             st.info("قيمة الاشتراك: 350 ر.س")
-            
             st.markdown("""
             #### 🏦 التحويل البنكي
-            الرجاء التحويل على الحساب التالي وإرفاق صورة الإيصال:
-            
             **اسم البنك:** مصرف الراجحي
             **الآيبان:** `SA0000000000000000000000`
             **اسم المستفيد:** عيادة أثير
             """)
-            
             st.divider()
-
             uploaded_receipt = st.file_uploader("إرفاق إيصال التحويل (مطلوب):", type=['png', 'jpg', 'pdf'])
-            
-            # تثبيت طريقة الدفع
             payment_method = "تحويل بنكي"
             
             c1, c2 = st.columns([2, 1])
@@ -276,16 +286,16 @@ else:
                         try:
                             sheet = connect_to_sheet()
                             if sheet:
-                                try:
-                                    current_headers = sheet.row_values(1)
-                                except:
-                                    current_headers = []
+                                try: current_headers = sheet.row_values(1)
+                                except: current_headers = []
 
+                                # --- ترتيب الأعمدة حسب طلبك بالضبط ---
+                                # الترتيب: file_no, Name, Phone, Gender, Weight, Target, Hight, ... باقي البيانات
                                 expected_headers = [
-                                    'file_no', 'name', 'phone', 'age', 'gender', 'height', 'weight', 
-                                    'target_weight', 'goals', 'activity', 'gym_home', 'exercise_days', 
-                                    'exercise_type', 'meals_count', 'fixed_time', 'allergies', 'dislikes', 
-                                    'water', 'sleep', 'meds', 'daily_routine', 'notes', 'payment_method', 'diet_plan_sent'
+                                    'file_no', 'Name', 'Phone', 'Gender', 'Weight', 'Target', 'Hight', 
+                                    'Age', 'Goals', 'Activity', 'Gym_Home', 'Exercise_Days', 
+                                    'Exercise_Type', 'Meals_Count', 'Fixed_Time', 'Allergies', 'Dislikes', 
+                                    'Water', 'Sleep', 'Meds', 'Daily_Routine', 'Notes', 'Payment_Method', 'diet_plan_sent'
                                 ]
                                 
                                 if not current_headers:
@@ -294,15 +304,17 @@ else:
                                 new_file_num = str(random.randint(10000, 99999))
                                 p = st.session_state.patient_data
                                 
+                                # --- بناء الصف بنفس الترتيب ---
                                 row = [
-                                    new_file_num,
-                                    p.get('name', ''),
-                                    str(p.get('phone', '')),
+                                    new_file_num,                 # file_no
+                                    p.get('name', ''),            # Name
+                                    str(p.get('phone', '')),      # Phone
+                                    p.get('gender', ''),          # Gender
+                                    p.get('weight', ''),          # Weight
+                                    p.get('target_weight', ''),   # Target
+                                    p.get('height', ''),          # Hight (كما هو مكتوب في الشيت)
+                                    # ... باقي البيانات تأتي بعد هذه الأعمدة الأساسية
                                     p.get('age', ''),
-                                    p.get('gender', ''),
-                                    p.get('height', ''),
-                                    p.get('weight', ''),
-                                    p.get('target_weight', ''),
                                     p.get('goals', ''),
                                     p.get('activity', ''),
                                     p.get('gym_home', ''),
@@ -320,46 +332,30 @@ else:
                                     payment_method,
                                     "FALSE"
                                 ]
-                                
                                 sheet.append_row(row)
-                                
                                 st.session_state.new_file_number = new_file_num
                                 next_step(); st.rerun()
-                                
                         except Exception as e:
                             st.error(f"حدث خطأ أثناء الحفظ: {e}")
-                    else:
-                        st.error("الرجاء إرفاق صورة الإيصال لإكمال التسجيل.")
-            
+                    else: st.error("الرجاء إرفاق الإيصال.")
             with c2:
                 if st.button("رجوع"): prev_step(); st.rerun()
 
         # صفحة 6: التهنئة
         elif st.session_state.step == 6:
-            gender_title = "يا بطل" if st.session_state.patient_data.get('gender') == "ذكر" else "يا بطلة"
             st.balloons()
             st.success("✅ تم استلام طلبك بنجاح!")
-            st.markdown(f"""
-            ### تهانينا {gender_title}! 🎉
-            سيتم مراجعة الإيصال وتفعيل اشتراكك وإرسال الجدول خلال 3 أيام عمل.
-            
-            **رقم ملفك الطبي:**
-            # 📂 `{st.session_state.new_file_number}`
-            """)
-            st.warning("⚠️ احفظ رقم الملف، ولكن يمكنك الدخول لاحقاً برقم جوالك أيضاً.")
+            st.markdown(f"### رقم ملفك الطبي: `{st.session_state.new_file_number}`")
             if st.button("العودة للرئيسية"): restart(); st.rerun()
 
     # ------------------------------------------------
-    # (ب) مسار المراجع (النسخة الآمنة والمعدلة)
+    # (ب) مسار المراجع (دخول آمن)
     # ------------------------------------------------
     elif st.session_state.user_type == 'returning':
-        
-        # دخول برقم الجوال
         if st.session_state.step == 1:
             st.markdown("### 🔐 دخول المشتركين")
             phone_input = st.text_input("رقم الجوال المسجل")
             
-            # زر الرجوع للقائمة الرئيسية هنا أيضاً
             c1, c2 = st.columns([2, 1])
             with c1:
                 if st.button("دخول", use_container_width=True):
@@ -367,25 +363,24 @@ else:
                     if sheet:
                         try:
                             all_values = sheet.get_all_values()
-                            
                             if len(all_values) > 1:
                                 headers = all_values[0]
                                 rows = all_values[1:]
                                 df = pd.DataFrame(rows, columns=headers)
                                 
+                                # توحيد الأعمدة لتفادي الأخطاء
+                                df.columns = df.columns.str.lower().str.strip()
+                                
+                                # البحث الذكي عن عمود الهاتف
                                 phone_col_name = None
                                 for col in df.columns:
-                                    if "phone" in str(col).lower():
+                                    if "phone" in str(col):
                                         phone_col_name = col
                                         break
                                 
                                 if phone_col_name:
                                     clean_input = str(phone_input).strip().replace(" ", "")
-                                    
-                                    def clean_phone(p):
-                                        return str(p).split('.')[0].strip().replace(" ", "")
-
-                                    df['clean_phone'] = df[phone_col_name].apply(clean_phone)
+                                    df['clean_phone'] = df[phone_col_name].astype(str).apply(lambda x: x.split('.')[0].strip().replace(" ", ""))
                                     
                                     user_record = df[
                                         (df['clean_phone'] == clean_input) | 
@@ -394,79 +389,63 @@ else:
                                     ]
                                     
                                     if not user_record.empty:
-                                        st.session_state.patient_data = user_record.iloc[0].to_dict()
+                                        # تحويل السجل لقاموس
+                                        user_dict = user_record.iloc[0].to_dict()
+                                        st.session_state.patient_data = user_dict
                                         next_step(); st.rerun()
                                     else:
                                         st.error("رقم الجوال غير مسجل لدينا.")
                                 else:
-                                    st.error("خطأ في قاعدة البيانات: لم يتم العثور على عمود الجوال.")
-                            else:
-                                st.warning("لا توجد بيانات مسجلة في النظام.")
-                                
+                                    st.error("خطأ: لم يتم العثور على عمود الجوال.")
                         except Exception as e:
                             st.error(f"حدث خطأ فني: {e}")
             with c2:
-                if st.button("🏠 رجوع", use_container_width=True):
-                    restart(); st.rerun()
+                if st.button("🏠 رجوع", use_container_width=True): restart(); st.rerun()
 
-        # لوحة تحكم المريض
+        # لوحة المريض
         elif st.session_state.step == 2:
             user = st.session_state.patient_data
-            name_display = user.get('name') or user.get('Name') or "مشترك"
+            # جلب الاسم بمرونة
+            name_display = user.get('name', 'مشترك')
             
             st.title(f"أهلاً بك {name_display} 👋")
-            
             st.markdown("### 📥 جدولك الغذائي")
             
-            sent_status = "FALSE"
-            for k, v in user.items():
-                if "sent" in str(k).lower():
-                    sent_status = str(v)
-            
+            # التحقق من حالة الإرسال
+            sent_status = str(user.get('diet_plan_sent', 'FALSE'))
             is_sent = sent_status.upper().strip() == "TRUE"
             
             if is_sent:
                 st.success("✅ تم إصدار جدولك الجديد!")
-                st.info("تم إرسال الجدول إليك (أو يمكنك التواصل مع الأخصائية لاستلامه).")
+                st.info("الجدول جاهز وتم إرساله لك.")
             else:
                 st.info("⏳ جاري تصميم جدولك... يرجى الانتظار (يستغرق 3 أيام عمل).")
             
             st.divider()
-            
             st.subheader("📊 المتابعة الأسبوعية")
-            st.write("هل انتهى أسبوعك وتريد تسجيل النتائج؟")
-            
-            if st.button("بدء المتابعة الأسبوعية ⬅️"):
-                next_step(); st.rerun() 
-            
+            if st.button("بدء المتابعة الأسبوعية ⬅️"): next_step(); st.rerun() 
             if st.button("خروج"): restart(); st.rerun()
 
-        # أسئلة المتابعة
         elif st.session_state.step == 3:
             st.markdown("### 📝 تسجيل قياسات الأسبوع")
             with st.form("update_w"):
-                col1, col2 = st.columns(2)
                 prev_w = st.session_state.patient_data.get('weight', 70)
                 try: prev_w = float(prev_w)
                 except: prev_w = 70.0
-
-                col1.metric("الوزن السابق", f"{prev_w} كجم")
-                current_w = col2.number_input("الوزن الحالي", 30.0, 200.0, prev_w)
-                submit = st.form_submit_button("التالي ⬅️")
-                if submit:
+                st.metric("الوزن السابق", f"{prev_w} كجم")
+                current_w = st.number_input("الوزن الحالي", 30.0, 200.0, prev_w)
+                if st.form_submit_button("التالي ⬅️"):
                     st.session_state.patient_data['current_w'] = current_w
                     next_step(); st.rerun()
 
         elif st.session_state.step == 4:
             st.markdown("### 📊 تقييم الأداء")
             with st.form("eval_form"):
-                diet_diff = st.radio("كيف كان النظام؟", ["سهل ومريح", "متوسط", "صعب جداً"])
-                adherence = st.slider("نسبة الالتزام %", 0, 100, 80)
-                fail_reason = st.text_input("سبب عدم الالتزام (إن وجد):")
-                symptoms = st.multiselect("أعراض ظهرت:", ["دوخة", "خمول", "جوع شديد", "إمساك", "لا يوجد"])
-                change_req = st.radio("ماذا تريد للأسبوع القادم؟", ["تغيير كامل", "تعديل بسيط", "استمرار نفس الجدول"])
-                
+                st.radio("كيف كان النظام؟", ["سهل", "متوسط", "صعب"])
+                st.slider("نسبة الالتزام %", 0, 100, 80)
+                st.text_input("سبب عدم الالتزام:")
+                st.multiselect("أعراض ظهرت:", ["دوخة", "خمول", "جوع", "لا يوجد"])
                 if st.form_submit_button("إرسال التقرير 🚀"):
                     st.balloons()
-                    st.success("تم إرسال تقرير المتابعة للأخصائية بنجاح!")
+                    st.success("تم إرسال التقرير!")
                     if st.button("عودة"): restart(); st.rerun()
